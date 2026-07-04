@@ -1,3 +1,5 @@
+const ws = require('ws');
+global.WebSocket = ws;
 const express = require('express');
 const mysql = require('mysql2');
 const bcrypt = require('bcryptjs');
@@ -16,9 +18,11 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret_key';
 
 // ================== SUPABASE CONFIGURATION ==================
 const SUPABASE_URL = 'https://hycuyavlnnvfplyyrgcj.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_KEY; // يتم قراءته من ملف .env
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const SUPABASE_KEY = process.env.SUPABASE_KEY; 
 
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: { persistSession: false }
+});
 // ================== CORS ==================
 const allowedOrigins = process.env.FRONTEND_URL
     ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
