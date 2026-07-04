@@ -13,15 +13,12 @@ const app = express();
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret_key';
+
 // ================== SUPABASE CONFIGURATION ==================
 const SUPABASE_URL = 'https://hycuyavlnnvfplyyrgcj.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_KEY || 'sb_secret_5XgUkFU6UORp_bPuYC9Izw_oA1GCooM';
-
-if (!SUPABASE_KEY || SUPABASE_KEY.includes('sb_secret_5XgUkFU6UORp_bPuYC9Izw_oA1GCooM')) {
-    console.error('⚠️ Warning: Supabase KEY is missing or invalid!');
-}
-
+const SUPABASE_KEY = process.env.SUPABASE_KEY; // يتم قراءته من ملف .env
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
 // ================== CORS ==================
 const allowedOrigins = process.env.FRONTEND_URL
     ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
