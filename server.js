@@ -7,11 +7,17 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
+const { createClient } = require('@supabase/supabase-js'); // إدخال مكتبة Supabase
 
 const app = express();
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret_key';
+
+// ================== SUPABASE CONFIGURATION ==================
+const SUPABASE_URL = 'https://hycuyavlnnvfplyyrgcj.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_KEY; // يتم قراءته من ملف .env
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ================== CORS ==================
 const allowedOrigins = process.env.FRONTEND_URL
@@ -20,10 +26,8 @@ const allowedOrigins = process.env.FRONTEND_URL
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow Postman, mobile apps, or same-origin requests with no origin
         if (!origin) return callback(null, true);
 
-        // If FRONTEND_URL is empty, allow all temporarily
         if (allowedOrigins.length === 0) {
             return callback(null, true);
         }
@@ -38,15 +42,6 @@ app.use(cors({
 }));
 
 app.use(express.json());
-
-// ================== UPLOADS ==================
-const uploadDir = path.join(__dirname, 'uploads');
-
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-app.use('/uploads', express.static(uploadDir));
 
 // ================== DATABASE CONNECTION ==================
 const db = mysql.createPool({
@@ -73,16 +68,9 @@ db.getConnection((err, connection) => {
     }
 });
 
-// ================== MULTER CONFIGURATION ==================
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-        cb(null, Date.now() + path.extname(file.originalname));
-    }
-});
-
+// ================== MULTER CONFIGURATION (MEMORY) ==================
+// تعديل: الحفظ في الذاكرة المؤقتة (Buffer) بدلاً من القرص لرفعها مباشرة إلى Supabase
+const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
 // ================== TEST ROUTE ==================
@@ -136,7 +124,6 @@ app.post('/api/login', (req, res) => {
         const user = results[0];
         let validPassword = false;
 
-        // Check if password is hashed or plain text
         if (user.password.length === 60 && user.password.startsWith('$2')) {
             validPassword = await bcrypt.compare(password, user.password);
         } else {
@@ -200,9 +187,38 @@ app.get('/api/courses/:id', (req, res) => {
     });
 });
 
-app.post('/api/courses', authenticateToken, isAdmin, upload.single('image'), (req, res) => {
+app.post('/api/courses', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
     const { course_name, description, hours, lesson, price, discount, status } = req.body;
-    const image = req.file ? req.file.filename : 'default.jpg';
+    let imageUrl = 'default.jpg';
+
+    if (req.file) {
+        try {
+            const fileName = `${Date.now()}_${req.file.originalname}`;
+
+            // 1. الرفع إلى Supabase Storage داخل باكت 'course-images'
+            const { data, error } = await supabase.storage
+                .from('course-images')
+                .upload(fileName, req.file.buffer, {
+                    contentType: req.file.mimetype,
+                    upsert: false
+                });
+
+            if (error) {
+                console.error('Supabase upload error:', error);
+                return res.status(500).json({ error: 'Failed to upload image to Supabase' });
+            }
+
+            // 2. جلب الرابط العام المباشر للصورة المرفوعة
+            const { data: publicUrlData } = supabase.storage
+                .from('course-images')
+                .getPublicUrl(fileName);
+
+            imageUrl = publicUrlData.publicUrl;
+        } catch (catchErr) {
+            console.error('Upload process failed:', catchErr);
+            return res.status(500).json({ error: 'Server error during upload' });
+        }
+    }
 
     const query = `
         INSERT INTO courses 
@@ -212,7 +228,7 @@ app.post('/api/courses', authenticateToken, isAdmin, upload.single('image'), (re
 
     db.query(
         query,
-        [course_name, description, hours, lesson, price, discount, image, status],
+        [course_name, description, hours, lesson, price, discount, imageUrl, status],
         (err, result) => {
             if (err) {
                 console.error('Error creating course:', err);
@@ -220,26 +236,49 @@ app.post('/api/courses', authenticateToken, isAdmin, upload.single('image'), (re
             }
 
             res.json({
-                message: 'Course created',
-                course_id: result.insertId
+                message: 'Course created with Supabase image',
+                course_id: result.insertId,
+                imageUrl: imageUrl
             });
         }
     );
 });
 
-app.put('/api/courses/:id', authenticateToken, isAdmin, upload.single('image'), (req, res) => {
+app.put('/api/courses/:id', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
     const { course_name, description, hours, lesson, price, discount, status } = req.body;
 
     let query = `
         UPDATE courses 
         SET course_name=?, description=?, hours=?, lesson=?, price=?, discount=?, status=?
     `;
-
     let params = [course_name, description, hours, lesson, price, discount, status];
 
     if (req.file) {
-        query += `, image=?`;
-        params.push(req.file.filename);
+        try {
+            const fileName = `${Date.now()}_${req.file.originalname}`;
+
+            const { data, error } = await supabase.storage
+                .from('course-images')
+                .upload(fileName, req.file.buffer, {
+                    contentType: req.file.mimetype,
+                    upsert: false
+                });
+
+            if (error) {
+                console.error('Supabase update upload error:', error);
+                return res.status(500).json({ error: 'Failed to upload new image' });
+            }
+
+            const { data: publicUrlData } = supabase.storage
+                .from('course-images')
+                .getPublicUrl(fileName);
+
+            query += `, image=?`;
+            params.push(publicUrlData.publicUrl);
+        } catch (catchErr) {
+            console.error('Update image process failed:', catchErr);
+            return res.status(500).json({ error: 'Server error during image update' });
+        }
     }
 
     query += ` WHERE course_id=?`;
@@ -251,7 +290,7 @@ app.put('/api/courses/:id', authenticateToken, isAdmin, upload.single('image'), 
             return res.status(500).json({ error: 'Database error' });
         }
 
-        res.json({ message: 'Course updated' });
+        res.json({ message: 'Course updated successfully' });
     });
 });
 
@@ -329,9 +368,7 @@ app.post('/api/students', authenticateToken, isAdmin, async (req, res) => {
                 (err, studentResult) => {
                     if (err) {
                         console.error('Error creating student profile:', err);
-
                         db.query('DELETE FROM users WHERE user_id = ?', [userResult.insertId]);
-
                         return res.status(500).json({
                             error: 'Failed to create student profile'
                         });
